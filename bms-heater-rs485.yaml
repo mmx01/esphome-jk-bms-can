@@ -1,0 +1,426 @@
+#Integration of JK-BMS TTL code with:
+#RS485 Pylon L01/L02 for Growatt can use Li profile setting in option 05 for smart communication
+#Thermostat with battery heater/cooler, heat when temp low, cool when temp high for unmanned installations in non-heated environments
+#Safety with 4 temp probes and standard deviation calculation for samples (2 readings from BMS, 2 via custom ads1115 ADC thermistors) min 3 inputs required
+#i2c display
+
+substitutions:
+  name: jk-bms
+  device_description: "Monitor a JK-BMS via UART-TTL"
+  external_components_source: github://syssi/esphome-jk-bms@main
+  tx_pin: GPIO16
+  rx_pin: GPIO17
+
+external_components:
+  - source: github://syssi/esphome-jk-bms@main
+
+
+esphome:
+  name: bms-heater
+  friendly_name: bms-heater
+  includes:
+    - gw485.h
+  platformio_options:
+    build_flags: 
+      - -DCONFIG_ARDUINO_LOOP_STACK_SIZE=32768
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  hardware_uart: UART1
+
+font:  
+  - file: "fonts/Roboto-Light.ttf"
+    id: my_font
+    size: 12
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+display:
+  - platform: ssd1306_i2c
+    model: "SH1106 128x64"
+    address: 0x3C
+    lambda: |-
+    
+      std::string stt;
+      if (id(heater).state == 0) { stt = "OFF"; } else { stt = "ON"; }
+      it.printf(0, 0, id(my_font), "BMS-Heater v3.7: %s", stt.c_str());
+      it.printf(0, 20, id(my_font), "TAVG: %.1fC", id(tavg).state);      
+      it.printf(0, 30, id(my_font), "SoC: %.f%%", id(caprem).state);
+      it.printf(0, 40, id(my_font), "VBatt: %.2f%V", id(bmstv).state);
+  #   it.printf(15, 50, id(my_font), " ");
+
+ads1115:
+  - address: 0x48
+
+sensor:
+  - platform: ads1115
+    multiplexer: 'A0_GND'
+    gain: 6.144
+    name: "ADS1115 Channel A0-GND"
+    id: ads0
+    update_interval: 30s
+
+
+  - platform: ads1115
+    multiplexer: 'A1_GND'
+    gain: 6.144
+    name: "ADS1115 Channel A1-GND"    
+    id: ads1
+    update_interval: 30s
+
+
+#sensor:
+  - platform: ntc
+    sensor: resistance_sensor
+    id: t1
+    name: Temp Sens 1
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 100kOhm 
+
+  - platform: resistance
+    id: resistance_sensor
+    sensor: ads0
+    configuration: DOWNSTREAM
+    resistor: 100.0kOhm
+    name: Resistance Sensor
+
+  - platform: ntc
+    sensor: resistance_sensor1
+    id: t2
+    name: Temp Sens 2
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 100kOhm 
+
+  - platform: resistance
+    id: resistance_sensor1
+    sensor: ads1
+    configuration: DOWNSTREAM
+    resistor: 100.0kOhm
+    name: Resistance Sensor
+
+  - platform: template
+    id: "tavg"    
+    name: "Batt Temperature Average"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    lambda: |-
+
+        float sum = 0;
+        uint16_t cnt = 0;
+        float t[4];
+        const uint8_t window_size_ = 10;
+        static std::deque<float> queue_;
+
+        if (!std::isnan(id(t1).state)) {
+         sum += id(t1).state;
+         t[cnt] = id(t1).state;
+         cnt += 1;
+        }
+        if (!std::isnan(id(t2).state)) {
+         sum += id(t2).state;
+         t[cnt] = id(t2).state;
+         cnt += 1;
+        }
+        if (!std::isnan(id(bmst1).state)) {
+         sum += id(bmst1).state;
+         t[cnt] = id(bmst1).state;
+         cnt += 1;
+        }
+        if (!std::isnan(id(bmst2).state)) {
+         sum += id(bmst2).state;
+         t[cnt] = id(bmst2).state;
+         cnt += 1;
+        }
+        if (cnt < 3) {
+          return NAN;
+        } else {
+
+          // If we have more entries in queue_ than the window_size_,
+          // then pop them off
+          while (queue_.size() >= window_size_) {
+            queue_.pop_front();
+          }
+
+          // add the newest reading to queue_
+          for (int o = 0; o < cnt; o++) {
+           queue_.push_back(t[o]);
+          }
+          
+          float Ex = 0.0;
+          float Ex2 = 0.0;
+          size_t count = 0;
+
+          float K = queue_.front();
+
+          for (auto v: queue_) {
+             if (!std::isnan(v)) {
+                count += 1;
+                Ex += v - K;
+                Ex2 += pow(v-K,2);
+              }
+            }
+
+            float standard_deviation = NAN;
+
+            if (count) {
+              float variance = (Ex2 - pow(Ex, 2)/count) / (count-1);
+              standard_deviation = sqrt(variance);
+            }
+
+            float tavg = (sum / cnt);
+            sum = 0;
+            uint16_t cntr = 0;
+           
+            for ( int a = 0; a < cnt; a++ ) {
+                if(t[a] < (tavg - standard_deviation) || t[a] > (tavg + standard_deviation)) {
+                  ESP_LOGD("temp", "discard: %d", a);
+                } else {
+                  sum += t[a];
+                  cntr++;
+                }
+            }
+
+            ESP_LOGD("temp", "std: %f", standard_deviation);
+
+            sum = (sum / cntr);
+
+            for (int o = 0; o < cnt; o++) {
+              ESP_LOGD("temp", "tdata: %f, %d", t[o], o);
+              if(t[o] > 60) { //fail safe heat
+                sum = NAN;
+              }
+            }
+            return sum;
+          }
+
+  - platform: jk_bms
+    charging_cycles:
+      name: "${name} charging cycles"
+      id: totalcc
+    total_runtime:
+      name: "${name} total runtime"
+      id: wdtrt
+    actual_battery_capacity:
+      name: "${name} actual battery capacity"
+      id: abc
+    min_cell_voltage:
+      name: "${name} min cell voltage"
+      id: mincellv
+    max_cell_voltage:
+      name: "${name} max cell voltage"
+      id: maxcellv
+    min_voltage_cell:
+      name: "${name} min voltage cell"
+    max_voltage_cell:
+      name: "${name} max voltage cell"
+    delta_cell_voltage:
+      name: "${name} delta cell voltage"
+    average_cell_voltage:
+      name: "${name} average cell voltage"
+    cell_voltage_1:
+      name: "${name} cell voltage 1"
+      id: cv1
+    cell_voltage_2:
+      name: "${name} cell voltage 2"
+      id: cv2
+    cell_voltage_3:
+      name: "${name} cell voltage 3"
+      id: cv3    
+    cell_voltage_4:
+      name: "${name} cell voltage 4"
+      id: cv4
+    cell_voltage_5:
+      name: "${name} cell voltage 5"
+      id: cv5  
+    cell_voltage_6:
+      name: "${name} cell voltage 6"
+      id: cv6
+    cell_voltage_7:
+      name: "${name} cell voltage 7"
+      id: cv7
+    cell_voltage_8:
+      name: "${name} cell voltage 8"
+      id: cv8
+    power_tube_temperature:
+      name: "${name} power tube temperature"
+      id: bmstmp
+    temperature_sensor_1:
+      name: "${name} temperature sensor 1"
+      id: bmst1
+    temperature_sensor_2:
+      name: "${name} temperature sensor 2"
+      id: bmst2
+    total_voltage:
+      name: "${name} total voltage"
+      id: bmstv
+    current:
+      name: "${name} current"
+      id: bmscurr
+    power:
+      name: "${name} power"
+    charging_power:
+      name: "${name} charging power"
+      id: chpw
+    discharging_power:
+      name: "${name} discharging power"
+      id: dispw
+    capacity_remaining:
+      name: "${name} capacity remaining"
+      id: caprem
+    capacity_remaining_derived:
+      name: "${name} capacity remaining derived"
+      id: totalcaprem
+    total_battery_capacity_setting:
+      name: "${name} total battery capacity setting"
+      id: totalcap
+    errors_bitmask:
+      name: "${name} errors bitmask"
+    operation_mode_bitmask:
+      name: "${name} operation mode bitmask"
+    total_voltage_overvoltage_protection:
+      name: "${name} total voltage overvoltage protection"
+      id: prot_ov
+    total_voltage_undervoltage_protection:
+      name: "${name} total voltage undervoltage protection"
+      id: prot_uv
+    cell_voltage_overvoltage_protection:
+      name: "${name} cell voltage overvoltage protection"
+    cell_voltage_undervoltage_protection:
+      name: "${name} cell voltage undervoltage protection"
+    cell_pressure_difference_protection:
+      name: "${name} cell pressure difference protection"
+    discharging_overcurrent_protection:
+      name: "${name} discharging overcurrent protection"
+      id: prot_dis_oc
+    charging_overcurrent_protection:
+      name: "${name} charging overcurrent protection"
+      id: prot_ch_oc
+    balance_opening_pressure_difference:
+      name: "${name} balance opening pressure difference"
+    power_tube_temperature_protection:
+      name: "${name} power tube temperature protection"
+    temperature_sensor_temperature_protection:
+      name: "${name} temperature sensor temperature protection"
+    temperature_sensor_temperature_recovery:
+      name: "${name} temperature sensor temperature recovery"
+    temperature_sensor_temperature_difference_protection:
+      name: "${name} temperature sensor temperature difference protection"
+    charging_high_temperature_protection:
+      name: "${name} charging high temperature protection"
+      id: prot_ch_thigh
+    discharging_high_temperature_protection:
+      name: "${name} discharging high temperature protection"
+      id: prot_dis_thigh
+    charging_low_temperature_protection:
+      name: "${name} charging low temperature protection"
+      id: prot_ch_tlow
+    discharging_low_temperature_protection:
+      name: "${name} discharging low temperature protection"
+      id: prot_dis_tlow
+
+text_sensor:
+  - platform: jk_bms
+    errors:
+      name: "${name} errors"
+      id: bmserr
+    total_runtime_formatted:
+      name: "${name} total runtime formatted"
+      id: bmsrtf
+
+switch:
+  - platform: gpio
+    name: "Heater"
+    id: heater
+    pin: GPIO26
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: gpio
+    name: "Fan"
+    id: fan
+    pin: GPIO27
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: restart
+    name: "BMS Heater"
+    id: bmshtr
+
+climate:
+  - platform: thermostat
+    visual:
+            max_temperature: 60
+    id: batth
+    name: "Battery Heater"
+    on_boot_restore_from: memory
+    sensor: tavg
+    min_heating_off_time: 300s
+    min_heating_run_time: 60s
+    min_cooling_off_time: 300s
+    min_cooling_run_time: 60s
+    min_idle_time: 30s
+    cool_action:
+      - switch.turn_on: fan
+    heat_action:
+      - switch.turn_on: heater
+    idle_action:
+      - switch.turn_off: heater
+      - switch.turn_off: fan
+    default_preset: Home
+    preset:
+      - name: Home
+        default_target_temperature_low: 10°C
+        default_target_temperature_high: 45°C
+        mode: HEAT_COOL
+
+uart:
+  - id: uart_0
+    baud_rate: 115200
+    rx_buffer_size: 384
+    tx_pin: ${tx_pin}
+    rx_pin: ${rx_pin}
+
+  - id: uart_1
+    baud_rate: 9600
+    rx_buffer_size: 384
+    tx_pin: GPIO1
+    rx_pin: GPIO3
+
+jk_modbus:
+  - id: modbus0
+    uart_id: uart_0
+    rx_timeout: 50ms
+
+jk_bms:
+  - id: bms0
+    jk_modbus_id: modbus0
+    update_interval: 10s
+
+binary_sensor:
+  - platform: jk_bms
+    balancing:
+      name: "${name} balancing"
+    balancing_switch:
+      name: "${name} balancing switch"
+    charging:
+      name: "${name} charging"
+    discharging:
+      name: "${name} discharging"
+    dedicated_charger_switch:
+      name: "${name} dedicated charger switch"
+    online_status:
+      name: "${name} online status"
+      id: bmscomms
+
+custom_component:
+- lambda: |-
+    auto my_custom = new gw485(id(uart_1));
+    ESP_LOGD("GW485","Setup UART");
+    return {my_custom};
