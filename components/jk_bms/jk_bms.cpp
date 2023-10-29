@@ -47,6 +47,7 @@ static const char *const BATTERY_TYPES[BATTERY_TYPES_SIZE] = {
 };
 
 void JkBms::on_jk_modbus_data(const uint8_t &function, const std::vector<uint8_t> &data) {
+  this->reset_online_status_tracker_();
   if (function == FUNCTION_READ_ALL) {
     this->on_status_data_(data);
     return;
