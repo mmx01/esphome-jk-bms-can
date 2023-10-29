@@ -1,7 +1,7 @@
 import esphome.codegen as cg
 from esphome.components import binary_sensor
 import esphome.config_validation as cv
-from esphome.const import CONF_ICON, CONF_ID
+from esphome.const import CONF_ICON, CONF_ID, DEVICE_CLASS_CONNECTIVITY, ENTITY_CATEGORY_DIAGNOSTIC
 
 from . import CONF_JK_BMS_ID, JkBms
 
@@ -16,6 +16,7 @@ CONF_DISCHARGING_SWITCH = "discharging_switch"
 CONF_BALANCING = "balancing"
 CONF_BALANCING_SWITCH = "balancing_switch"
 CONF_DEDICATED_CHARGER_SWITCH = "dedicated_charger_switch"
+CONF_ONLINE_STATUS = "online_status"
 
 ICON_CHARGING = "mdi:battery-charging"
 ICON_CHARGING_SWITCH = "mdi:battery-charging"
@@ -33,6 +34,7 @@ BINARY_SENSORS = [
     CONF_BALANCING,
     CONF_BALANCING_SWITCH,
     CONF_DEDICATED_CHARGER_SWITCH,
+    CONF_ONLINE_STATUS,
 ]
 
 CONFIG_SCHEMA = cv.Schema(
@@ -81,6 +83,10 @@ CONFIG_SCHEMA = cv.Schema(
                 cv.GenerateID(): cv.declare_id(binary_sensor.BinarySensor),
                 cv.Optional(CONF_ICON, default=ICON_DEDICATED_CHARGER_SWITCH): cv.icon,
             }
+        ),
+        cv.Optional(CONF_ONLINE_STATUS): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_CONNECTIVITY,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         ),
     }
 )

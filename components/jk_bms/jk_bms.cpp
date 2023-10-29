@@ -11,6 +11,8 @@ static const uint8_t FUNCTION_READ_ALL = 0x06;
 static const uint8_t ADDRESS_READ_ALL = 0x00;
 static const uint8_t WRITE_REGISTER = 0x02;
 
+static const uint8_t MAX_NO_RESPONSE_COUNT = 5;
+
 static const uint8_t ERRORS_SIZE = 14;
 static const char *const ERRORS[ERRORS_SIZE] = {
     "Low capacity",                              // Byte 0.0, warning
@@ -372,7 +374,9 @@ void JkBms::on_status_data_(const std::vector<uint8_t> &data) {
 }
 
 void JkBms::update() {
+  this->track_online_status_();
   this->read_registers(FUNCTION_READ_ALL, ADDRESS_READ_ALL);
+
 
   if (this->enable_fake_traffic_) {
     // Start: 0x4E, 0x57, 0x01, 0x1B, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01
@@ -421,6 +425,27 @@ void JkBms::update() {
     */
     // End: 0x00 0x00 0x00 0x00 0x68 0x00 0x00 0x47 0x28
   }
+}
+
+void JkBms::track_online_status_() {
+  if (this->no_response_count_ < MAX_NO_RESPONSE_COUNT) {
+    this->no_response_count_++;
+  }
+  if (this->no_response_count_ == MAX_NO_RESPONSE_COUNT) {
+    this->publish_device_unavailable_();
+    this->no_response_count_++;
+  }
+}
+
+void JkBms::reset_online_status_tracker_() {
+  this->no_response_count_ = 0;
+  this->publish_state_(this->online_status_binary_sensor_, true);
+}
+
+void JkBms::publish_device_unavailable_() {
+  this->publish_state_(this->online_status_binary_sensor_, false);
+  this->publish_state_(this->errors_text_sensor_, "Offline");
+
 }
 
 void JkBms::publish_state_(binary_sensor::BinarySensor *binary_sensor, const bool &state) {
