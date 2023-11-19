@@ -514,6 +514,7 @@ void JkBms::dump_config() {  // NOLINT(google-readability-function-size,readabil
   ESP_LOGCONFIG(TAG, "JkBms:");
   ESP_LOGCONFIG(TAG, "  Address: 0x%02X", this->address_);
   ESP_LOGCONFIG(TAG, "  Fake traffic enabled: %s", YESNO(this->enable_fake_traffic_));
+  /*
   LOG_SENSOR("", "Minimum Cell Voltage", this->min_cell_voltage_sensor_);
   LOG_SENSOR("", "Maximum Cell Voltage", this->max_cell_voltage_sensor_);
   LOG_SENSOR("", "Minimum Voltage Cell", this->min_voltage_cell_sensor_);
@@ -608,7 +609,9 @@ void JkBms::dump_config() {  // NOLINT(google-readability-function-size,readabil
   LOG_BINARY_SENSOR("", "Discharging", this->discharging_binary_sensor_);
   LOG_BINARY_SENSOR("", "Discharging Switch", this->discharging_switch_binary_sensor_);
   LOG_BINARY_SENSOR("", "Dedicated Charger Switch", this->dedicated_charger_switch_binary_sensor_);
-  LOG_TEXT_SENSOR("", "Total Runtime Formatted", this->total_runtime_formatted_text_sensor_);
+
+  */
+  LOG_TEXT_SENSOR("", "JK-BMS Total Runtime Formatted", this->total_runtime_formatted_text_sensor_);
 }
 
 }  // namespace jk_bms
